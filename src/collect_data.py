@@ -6,7 +6,9 @@ from scipy.spatial import cKDTree
 def get_job_table(pr):
     df = pr.job_table()
     df = df[
-        (df.status != "running") & (df.status != "submitted") & df.chemicalformula.str.isalnum()
+        (df.status != "running")
+        & (df.status != "submitted")
+        & df.chemicalformula.str.isalnum()
     ]
     df["job_stem"] = ["_".join(job_name.split("_")[:2]) for job_name in df.job]
     return df[~df.job_stem.duplicated(keep="last")]
@@ -62,3 +64,33 @@ def collect_data(project):
             [f[np.argsort(ii)] for f, ii in zip(data_dict[cs]["magmoms"], indices)]
         )
     return data_dict
+
+
+def combine_fits(project):
+    x_list, y_list = [], []
+    for job in project.iter_jobs(job="fit_parameters*", convert_to_object=False):
+        X, Y = job.content["storage/output/result"]
+        Y = [yyy for yy in Y for yyy in yy]
+        X = [xxx for xx in X for xxx in xx]
+        for xx, yy in zip(X, Y):
+            if (
+                len(x_list) > 0
+                and np.linalg.norm(xx) == 0
+                and np.linalg.norm(x_list, axis=-1).min() == 0
+            ):
+                continue
+            if (
+                len(x_list) > 0
+                and np.isclose(
+                    np.abs(
+                        np.einsum("x,nx->n", xx, x_list)
+                        / np.linalg.norm(xx)
+                        / np.linalg.norm(x_list, axis=-1)
+                    ),
+                    1.0,
+                ).any()
+            ):
+                continue
+            x_list.append(xx)
+            y_list.append(yy)
+    return x_list, y_list
