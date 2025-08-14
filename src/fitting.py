@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.spatial import cKDTree
+from collections import defaultdict
 from pyiron_atomistics.atomistics.structure.factory import StructureFactory
 
 
@@ -16,15 +16,15 @@ def get_structure(cs):
     if cs == "bcc":
         return factory.bulk("Fe", cubic=True, a=2).repeat(4)
     else:
-        return factory.bulk(
-            "Fe", cubic=True, crystalstructure="fcc", a=2
-        ).repeat(4)
+        return factory.bulk("Fe", cubic=True, crystalstructure="fcc", a=2).repeat(4)
 
 
 def get_neigh_indices(structure, s_count):
     neigh = structure.get_neighbors(num_neighbors=100)
     vecs = neigh.vecs[neigh.shells <= s_count]
-    vecs, indices = np.unique(np.round(vecs).astype(int).reshape(-1, 3), axis=0, return_inverse=True)
+    vecs, indices = np.unique(
+        np.round(vecs).astype(int).reshape(-1, 3), axis=0, return_inverse=True
+    )
     return vecs, indices.reshape(len(structure), -1)
 
 
@@ -39,23 +39,24 @@ def vec_to_str(vector):
 
 def get_all_keys(vecs, s_counts, max_exp):
     keys = [f"J_{ii}" for ii in range(s_counts)]
-    for key in ["x", "y", "z"]:
-        for v in vecs:
-            keys.append(f"H_{vec_to_str(v)}_{key}")
     for v in vecs:
-        keys.append(f"K_{vec_to_str(v)}")
-    for key in ["x", "y", "z"]:
-        for v in vecs:
-            keys.append(f"L_{vec_to_str(v)}_{key}")
+        for key_1 in ["x", "y", "z"]:
+            for key_2 in ["x", "y", "z"]:
+                keys.append(f"H_{vec_to_str(v)}_{key_1}_{key_2}")
+    for v in vecs:
+        for key in ["x", "y", "z"]:
+            keys.append(f"K_{vec_to_str(v)}_{key}")
+    for v in vecs:
+        for key_1 in ["x", "y", "z"]:
+            for key_2 in ["x", "y", "z"]:
+                keys.append(f"L_{vec_to_str(v)}_{key_1}_{key_2}")
     for ii in range(max_exp):
         keys.append(f"A_{2 * (ii + 1)}")
     keys.append("y")
     return keys
 
 
-def fit_parameters(
-    positions, magmoms, max_exp, energy, forces
-):
+def fit_parameters(positions, magmoms, max_exp, energy, forces):
     if len(positions) == 128:
         s_count = 5
         cs = "bcc"
@@ -69,22 +70,23 @@ def fit_parameters(
     rotations = np.unique(symmetry.rotations, axis=0)
     if np.isclose(np.linalg.norm(positions), 0):
         rotations = [np.eye(3)]
-    X, Y = [], []
+    X = []
+    tags = []
     for rr in rotations:
         x = positions @ rr
         unique_atoms = get_unique_args(structure, x, magmoms)
         J = np.array([magmoms.dot(s.dot(magmoms)) for s in shell_mat]) / 2
         dJdm = np.array([s.dot(magmoms) for s in shell_mat]).T[unique_atoms]
-        H = np.einsum("ij,ikl->kl", x, x[unique_vec_indices]) / 2
-        dHdx = (
-            x[unique_vec_indices][unique_atoms][:, None, :, :] * np.ones(3)[:, None, None]
+        H = np.einsum("ij,ikl->kjl", x, x[unique_vec_indices]) / 2
+        dHdx = np.einsum(
+            "ikm,jl->ijklm", x[unique_vec_indices][unique_atoms], np.eye(3)
         )
-        K = np.einsum("i,ij,ik->k", magmoms, x, magmoms[unique_vec_indices]) / 2
+        K = np.einsum("i,ij,ik->kj", magmoms, x, magmoms[unique_vec_indices]) / 2
         dKdx = (
             np.einsum(
-                "i,j,ik->ijk",
+                "i,jl,ik->ijkl",
                 magmoms,
-                np.ones(3),
+                np.eye(3),
                 magmoms[unique_vec_indices],
             )[unique_atoms]
             / 2
@@ -92,24 +94,17 @@ def fit_parameters(
         dKdm = (
             0.5
             * (
-                np.einsum("ij,ik->ik", x, magmoms[unique_vec_indices])
+                np.einsum("ij,ik->ikj", x, magmoms[unique_vec_indices])
                 + np.einsum(
-                    "ikj,ik->ik",
+                    "ikj,ik->ikj",
                     x[unique_vec_indices],
                     magmoms[unique_vec_indices],
                 )
             )[unique_atoms]
         )
-        dLdx = np.einsum(
-            "i,j,ik,ikl->ijkl",
-            magmoms,
-            np.ones(3),
-            magmoms[unique_vec_indices],
-            x[unique_vec_indices],
-        )[unique_atoms]
         L = (
             np.einsum(
-                "i,ij,ik,ikl->kl",
+                "i,ij,ik,ikl->kjl",
                 magmoms,
                 x,
                 magmoms[unique_vec_indices],
@@ -117,8 +112,15 @@ def fit_parameters(
             )
             / 2
         )
+        dLdx = np.einsum(
+            "i,jm,ik,ikl->ijkml",
+            magmoms,
+            np.eye(3),
+            magmoms[unique_vec_indices],
+            x[unique_vec_indices],
+        )[unique_atoms]
         dLdm = np.einsum(
-            "ij,ik,ikl->ikl",
+            "ij,ik,ikl->ikjl",
             x,
             magmoms[unique_vec_indices],
             x[unique_vec_indices],
@@ -161,13 +163,25 @@ def fit_parameters(
         )
         X.extend(
             np.append(
-                E_stack.reshape(1, -1).tolist() + dEdx_stack.tolist() + dEdm_stack.tolist(),
-                np.reshape([energy] + (forces @ rr)[unique_atoms].flatten().tolist() + len(unique_atoms) * [0], (-1, 1)),
-                axis=-1
+                E_stack.reshape(1, -1).tolist()
+                + dEdx_stack.tolist()
+                + dEdm_stack.tolist(),
+                np.reshape(
+                    [energy]
+                    + (forces @ rr)[unique_atoms].flatten().tolist()
+                    + len(unique_atoms) * [0],
+                    (-1, 1),
+                ),
+                axis=-1,
             )
         )
+        tags.extend(["E"] + 3 * len(unique_atoms) * ["f"] + len(unique_atoms) * ["nu"])
     indices = np.unique(np.round(X, decimals=8), axis=0, return_index=True)[1]
-    return np.asarray(X)[indices], get_all_keys(unique_vecs, s_count, max_exp)
+    return (
+        np.asarray(X)[indices],
+        get_all_keys(unique_vecs, s_count, max_exp),
+        np.asarray(tags)[indices].tolist(),
+    )
 
 
 def combine_fits(project, job_list):
