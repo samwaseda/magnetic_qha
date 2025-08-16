@@ -11,12 +11,12 @@ def get_unique_args(structure, displacements, magmoms):
     return np.unique(args, return_index=True)[1]
 
 
-def get_structure(cs):
+def get_structure(cs, n_repeat=4):
     factory = StructureFactory()
     if cs == "bcc":
-        return factory.bulk("Fe", cubic=True, a=2).repeat(4)
+        return factory.bulk("Fe", cubic=True, a=2).repeat(n_repeat)
     else:
-        return factory.bulk("Fe", cubic=True, crystalstructure="fcc", a=2).repeat(4)
+        return factory.bulk("Fe", cubic=True, crystalstructure="fcc", a=2).repeat(n_repeat)
 
 
 def get_neigh_indices(structure, s_count):
