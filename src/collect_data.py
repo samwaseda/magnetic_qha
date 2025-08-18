@@ -3,8 +3,8 @@ from collections import defaultdict
 from scipy.spatial import cKDTree
 
 
-def get_job_table(pr):
-    df = pr.job_table()
+def get_job_table(pr, **kwargs):
+    df = pr.job_table(**kwargs)
     df = df[
         (df.status != "running")
         & (df.status != "submitted")
