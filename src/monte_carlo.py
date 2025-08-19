@@ -5,6 +5,9 @@ from magnetic_qha.src.fitting import get_structure
 def run_simple_mc(temperature, n_steps, cs, data_dict, metadynamics=False, n_repeat=20):
     structure = get_structure(cs, n_repeat=n_repeat)
     mc = MC(len(structure))
+    mc.set_magnetic_moments(
+        structure.get_initial_magnetic_moments()[:, None] * [1, 0, 0]
+    )
     if cs == "bcc":
         neigh = structure.get_neighbors(num_neighbors=58)
     else:
