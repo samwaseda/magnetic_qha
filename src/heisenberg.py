@@ -7,6 +7,15 @@ from magnetic_qha.src.collect_data import get_job_table
 from magnetic_qha.src.fitting import get_structure
 
 
+def regularize_structure(structure):
+    struct = structure.copy()
+    struct.positions[0] *= 0
+    cell = np.eye(3) * (struct.analyse.get_layers().max(axis=0) + 1)
+    struct.set_cell(cell, scale_atoms=True)
+    struct.positions = np.round(struct.positions).astype(int)
+    return struct
+
+
 def get_heisenberg_data(project, max_exp=5):
     data_dict = {}
     df = get_job_table(project)
