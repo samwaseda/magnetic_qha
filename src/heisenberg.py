@@ -47,54 +47,29 @@ def get_heisenberg_data(project, max_exp=5):
 
 
 def get_heisenberg_forces(project):
-
     result_df = {}
     for cs in ["bcc", "fcc"]:
-        structure = get_structure(cs=cs, n_repeat=1)
-        if cs == "bcc":
-            ref_vecs = np.round(structure.get_neighbors(num_neighbors=58).vecs[0]).astype(int)
-        else:
-            ref_vecs = np.round(structure.get_neighbors(num_neighbors=86).vecs[0]).astype(int)
-        tree = cKDTree(ref_vecs)
-        # keys = ["_".join(str(key).replace("-", "m") for key in vec) for vec in ref_vecs]
-        keys = [str(vec) for vec in ref_vecs]
-        symmetry = structure.get_symmetry()
-        rotations = symmetry.rotations[np.sort(np.unique(symmetry.rotations, return_index=True, axis=0)[1])]
-        output_data = defaultdict(list)
         for job in project.iter_jobs(job=f"{cs}*", convert_to_object=False):
-            if job.status == "aborted":
+            if job.status not in ["finished", "not_converged"]:
                 continue
-            structure = job.content["input/structure"].to_object()
-            v = structure.get_volume(per_atom=True)
-            if not np.isclose(structure.positions[0], [0, 0, 0]).all():
+            struct = job.content["input/structure"].to_object()
+            if not np.isclose(struct.positions[0, 0], 0):
                 continue
-            if cs == "fcc":
-                neigh = structure.get_neighbors(num_neighbors=86)
-                a_0 = (4 * v)**(1 / 3)
-            else:
-                neigh = structure.get_neighbors(num_neighbors=58)
-                a_0 = (2 * v)**(1 / 3)
-            vecs = np.round(neigh.vecs[0] / a_0 * 2).astype(int)
-            indices = np.unique(np.einsum("nx,mxy->mny", vecs, rotations).reshape(-1, 3), axis=0, return_inverse=True)[1]
-            try:
-                m = job["output/generic/dft/atom_spins"][-1]
-            except TypeError:
-                m = np.zeros(len(structure))
-            prod = m[neigh.indices[0]] * m[0]
-            indices = np.argsort(tree.query(np.einsum("nx,mxy->mny", vecs, rotations).reshape(-1, 3))[1].reshape(len(rotations), len(vecs)))
-            forces = np.einsum("i,nij->jn", job.content["output/generic/forces"][-1][0], rotations)
-            for tag, ff in zip(["f_x", "f_y", "f_z"], forces):
-                output_data[tag].extend(ff)
-            for key, mm in zip(keys, prod[indices].T):
-                output_data[key].extend(mm)
-            output_data["volume"].extend(len(mm) * [v])
-        df = pd.DataFrame(output_data)
-        df.volume = np.round(df.volume, decimals=6)
-        df = df[~df.duplicated()]
-        result_df[cs] = df
-    return result_df
+            structure = regularize_structure(struct)
+            unique_ids = np.unique(structure.get_symmetry(use_magmoms=True).arg_equivalent_atoms)
+            data_dict["volume"].extend(len(unique_ids) * [struct.get_volume(per_atom=True)])
+            m = job.content["output/generic/dft/atom_spins"][-1]
+            neigh = structure.get_neighbors(num_neighbors=58)
+            for vv in neigh.vecs[0].astype(int):
+                for ii, jj in zip(*np.where(np.all(neigh.vecs[unique_ids] == vv, axis=-1))):
+                    data_dict[str(vv)].append(m[neigh.indices[ii][jj]] * m[ii])
+            for ii, xyz in enumerate(["x", "y", "z"]):
+                for unique_id in unique_ids:
+                    data_dict[f"f_{xyz}"].append(job.content["output/generic/forces"][-1][unique_id][ii])
+        result_df = {cs: pd.DataFrame(data_dict)}
+    return result_df 
 
-
+ 
 def get_heisenberg_displacement(project):
 
     result_df = {}
